@@ -1,6 +1,5 @@
-Here is the **fully formatted, clean, GitHub-ready README** using proper Markdown headers (`#`, `##`, `###`), tables, code blocks, and bullet styling — **just copy–paste into README.md**:
 
----
+
 
 # 🚀 LinkedIn Sentiment Analyzer & Scraper
 
