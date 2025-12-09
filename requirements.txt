@@ -1,0 +1,6 @@
+selenium
+pandas
+nltk
+openpyxl
+webdriver-manager
+pyinstaller
