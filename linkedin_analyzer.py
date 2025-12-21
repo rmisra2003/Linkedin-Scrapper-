@@ -11,7 +11,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import WebDriverException, StaleElementReferenceException
 
 # --- CONFIGURATION ---
 try:
@@ -126,35 +126,54 @@ def main():
     # 5. Scraping Loop
     try:
         while True:
-            # Click 'Load more'
+            # --- SCOPING LOGIC ---
+            # Instead of searching the entire page (which picks up other posts),
+            # we look for the FIRST comment list container.
+            # This generally corresponds to the main post URL we navigated to.
+            
             try:
-                load_btns = driver.find_elements(By.XPATH, "//button[contains(@class, 'comments-comments-list__load-more-comments-button')]")
-                for btn in load_btns:
-                    if btn.is_displayed():
-                        driver.execute_script("arguments[0].click();", btn)
-                        time.sleep(1)
-            except: pass
+                # Find all comment lists
+                # LinkedIn uses 'comments-comments-list' for the UL containing comments
+                comment_containers = driver.find_elements(By.CLASS_NAME, "comments-comments-list")
+                
+                if comment_containers:
+                    # STRICT FILTER: Only look inside the first container found
+                    main_container = comment_containers[0]
+                    
+                    # 1. Click 'Load more' ONLY inside this container
+                    try:
+                        load_btns = main_container.find_elements(By.XPATH, ".//button[contains(@class, 'comments-comments-list__load-more-comments-button')]")
+                        for btn in load_btns:
+                            if btn.is_displayed():
+                                driver.execute_script("arguments[0].click();", btn)
+                                time.sleep(0.5)
+                    except: pass
 
-            # Find Comments
-            # UPDATED: We now look specifically for 'comments-comment-item' class
-            # This prevents scraping other posts/articles if you scroll down too far.
-            try:
-                comments = driver.find_elements(By.CLASS_NAME, "comments-comment-item")
+                    # 2. Find Comments ONLY inside this container
+                    # This prevents finding 'comments-comment-item' from posts further down the feed
+                    comments = main_container.find_elements(By.CLASS_NAME, "comments-comment-item")
+                else:
+                    # If no comment list is found yet (loading or no comments), found list is empty
+                    comments = []
+
+            except StaleElementReferenceException:
+                # If the container updates while we are grabbing it, skip this loop iteration
+                continue
             except Exception as e:
-                # If window is closed, find_elements will throw a connection error
+                # Check for browser closure
                 if "Connection aborted" in str(e) or "forcibly closed" in str(e) or "invalid session" in str(e):
-                    raise WebDriverException("Browser Closed") # Raise to outer block
+                    raise WebDriverException("Browser Closed")
                 else:
                     comments = [] 
 
             for comment_node in comments:
                 try:
-                    # 1. Extract Text
+                    # Extract Text
                     text_elems = comment_node.find_elements(By.XPATH, ".//span[@dir='ltr']")
                     if not text_elems: continue
                     comment_text = text_elems[0].text.strip()
                     
-                    # 2. Extract Author Name
+                    # Extract Author Name
                     author = "Unknown"
                     profile_link = ""
                     try:
@@ -170,13 +189,13 @@ def main():
                         except:
                             pass 
 
-                    # 3. Create Unique ID
+                    # Create Unique ID
                     unique_id = f"{author[:15]}_{comment_text[:20]}"
 
                     if unique_id not in seen_comments and comment_text:
                         sentiment = categorize_sentiment(sia, comment_text)
                         
-                        # 4. Filter Logic
+                        # Filter Logic
                         if "ALL" in target_categories or sentiment in target_categories:
                             seen_comments.add(unique_id)
                             
@@ -195,15 +214,16 @@ def main():
                 except Exception: continue
 
             # Scroll
-            driver.execute_script("window.scrollBy(0, 500);")
-            time.sleep(2)
+            # We scroll the window to trigger lazy loading, but since we scoped our 'comments'
+            # variable to 'main_container', new posts loading below won't be added to our list.
+            driver.execute_script("window.scrollBy(0, 300);")
+            time.sleep(1.5)
             sys.stdout.write(f"\rTotal Collected: {len(scraped_data)} | Scanning... (Press Ctrl+C to save)")
             sys.stdout.flush()
 
     except KeyboardInterrupt:
         print("\n\n!!! STOPPING SCRAPER (User Interrupt) !!!")
     except Exception as e:
-        # Catch browser closing or connection loss
         if "Browser Closed" in str(e) or "Connection aborted" in str(e) or "forcibly closed" in str(e):
              print("\n\n⚠️ Browser window closed. Saving collected data...")
         else:
