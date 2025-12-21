@@ -43,6 +43,8 @@ def categorize_sentiment(sia, text):
 def attempt_terminal_login(driver):
     """Auto-fill credentials from terminal"""
     print("\n--- Terminal Login Credentials ---")
+    print("NOTE: This only works for direct LinkedIn email/password.")
+    print("If you use Google Sign-In, please restart and choose Option 2.")
     email = input("  -> Email: ").strip()
     password = getpass.getpass("  -> Password (hidden): ").strip()
     
@@ -76,6 +78,13 @@ def main():
     options = webdriver.ChromeOptions()
     options.add_argument("--log-level=3") 
     
+    # --- FIX FOR GOOGLE AUTH BLOCKS ---
+    # These options make the browser look like a real human user to Google
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    # ----------------------------------
+
     try:
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     except Exception as e:
@@ -85,13 +94,17 @@ def main():
     # 2. Login Phase
     driver.get("https://www.linkedin.com/login")
     print("\n[2/5] Login Method:")
-    print("     [1] Enter Credentials Here (Terminal)")
-    print("     [2] Log in Manually in Browser (Safer)")
-    if input("  -> Choose (1/2): ").strip() == '1':
+    print("     [1] Enter Email/Password (Terminal)")
+    print("     [2] Log in Manually (REQUIRED for Google/Apple Sign-In)")
+    
+    choice = input("  -> Choose (1/2): ").strip()
+    
+    if choice == '1':
         attempt_terminal_login(driver)
         input("\n  -> Check Browser: If Login is done, PRESS ENTER to continue...")
     else:
         print("\n  -> ACTION REQUIRED: Please Log in to LinkedIn in the opened Chrome window.")
+        print("  -> (You can now safely use the 'Sign in with Google' button)")
         input("  -> Once you are logged in, PRESS ENTER here to continue...")
 
     # 3. User Inputs (Multiple Selection)
