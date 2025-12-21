@@ -11,6 +11,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import WebDriverException
 
 # --- CONFIGURATION ---
 try:
@@ -40,46 +41,17 @@ def categorize_sentiment(sia, text):
     else:
         return "Worst"
 
-def attempt_terminal_login(driver):
-    """Auto-fill credentials from terminal"""
-    print("\n--- Terminal Login Credentials ---")
-    print("NOTE: This only works for direct LinkedIn email/password.")
-    print("If you use Google Sign-In, please restart and choose Option 2.")
-    email = input("  -> Email: ").strip()
-    password = getpass.getpass("  -> Password (hidden): ").strip()
-    
-    print("\n  -> Attempting to log in...")
-    try:
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "username")))
-        
-        driver.find_element(By.ID, "username").send_keys(email)
-        pass_elem = driver.find_element(By.ID, "password")
-        pass_elem.send_keys(password)
-        pass_elem.send_keys(Keys.RETURN)
-        
-        print("  -> Credentials submitted.")
-        time.sleep(5)
-        if "feed" in driver.current_url or "checkpoint" not in driver.current_url:
-            print("  -> Login flow processing...")
-        else:
-            print("  -> ! CAPTCHA OR 2FA DETECTED !")
-            
-    except Exception as e:
-        print(f"  -> Automated login failed: {e}")
-        print("  -> Please finish logging in manually in the browser.")
-
 def main():
     print("========================================")
     print("   LINKEDIN COMMENT SENTIMENT CLI")
     print("========================================")
 
     # 1. Setup Driver
-    print("\n[1/5] Launching Browser...")
+    print("\n[1/4] Launching Browser...")
     options = webdriver.ChromeOptions()
     options.add_argument("--log-level=3") 
     
     # --- FIX FOR GOOGLE AUTH BLOCKS ---
-    # These options make the browser look like a real human user to Google
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
@@ -91,24 +63,18 @@ def main():
         print(f"Error launching Chrome: {e}")
         return
 
-    # 2. Login Phase
+    # 2. Login Phase (Manual Only)
     driver.get("https://www.linkedin.com/login")
-    print("\n[2/5] Login Method:")
-    print("     [1] Enter Email/Password (Terminal)")
-    print("     [2] Log in Manually (REQUIRED for Google/Apple Sign-In)")
+    print("\n[2/4] Login Required:")
+    print("  -> A Chrome window has opened.")
+    print("  -> ACTION REQUIRED: Please Log in to LinkedIn manually in that window.")
+    print("  -> (You can safely use 'Sign in with Google' or email/password)")
     
-    choice = input("  -> Choose (1/2): ").strip()
-    
-    if choice == '1':
-        attempt_terminal_login(driver)
-        input("\n  -> Check Browser: If Login is done, PRESS ENTER to continue...")
-    else:
-        print("\n  -> ACTION REQUIRED: Please Log in to LinkedIn in the opened Chrome window.")
-        print("  -> (You can now safely use the 'Sign in with Google' button)")
-        input("  -> Once you are logged in, PRESS ENTER here to continue...")
+    # Wait for user confirmation
+    input("\n  -> Once you are successfully logged in and can see your feed, PRESS ENTER here to continue...")
 
     # 3. User Inputs (Multiple Selection)
-    print("\n[3/5] Configuration:")
+    print("\n[3/4] Configuration:")
     post_url = input("  -> Paste the LinkedIn Post URL here: ").strip()
     
     print("\n  -> Which comments do you want to keep? (Enter multiple separated by commas)")
@@ -139,7 +105,7 @@ def main():
     if not target_categories or "ALL" in target_categories:
         target_categories = ["ALL"]
 
-    print(f"\n[4/5] Starting scraper for categories: {target_categories}...")
+    print(f"\n[4/4] Starting scraper for categories: {target_categories}...")
     print("---------------------------------------------------------------")
     print("  !!! PRESS CTRL+C AT ANY TIME TO STOP AND SAVE TO EXCEL !!!")
     print("---------------------------------------------------------------")
@@ -148,7 +114,9 @@ def main():
         driver.get(post_url)
     except Exception as e:
         print(f"Invalid URL: {e}")
-        driver.quit()
+        try:
+            driver.quit()
+        except: pass
         return
 
     sia = SentimentIntensityAnalyzer()
@@ -167,9 +135,18 @@ def main():
                         time.sleep(1)
             except: pass
 
-            # Find Articles
-            comments = driver.find_elements(By.TAG_NAME, "article")
-            
+            # Find Comments
+            # UPDATED: We now look specifically for 'comments-comment-item' class
+            # This prevents scraping other posts/articles if you scroll down too far.
+            try:
+                comments = driver.find_elements(By.CLASS_NAME, "comments-comment-item")
+            except Exception as e:
+                # If window is closed, find_elements will throw a connection error
+                if "Connection aborted" in str(e) or "forcibly closed" in str(e) or "invalid session" in str(e):
+                    raise WebDriverException("Browser Closed") # Raise to outer block
+                else:
+                    comments = [] 
+
             for comment_node in comments:
                 try:
                     # 1. Extract Text
@@ -177,13 +154,12 @@ def main():
                     if not text_elems: continue
                     comment_text = text_elems[0].text.strip()
                     
-                    # 2. Extract Author Name (Improved)
+                    # 2. Extract Author Name
                     author = "Unknown"
                     profile_link = ""
                     try:
                         # Try method A: The standard actor link
                         author_elem = comment_node.find_element(By.CSS_SELECTOR, "a.comments-post-meta__actor-link")
-                        # .text often contains Name \n Title. We just want the Name (index 0)
                         author = author_elem.text.split('\n')[0].strip()
                         profile_link = author_elem.get_attribute('href')
                     except:
@@ -192,7 +168,7 @@ def main():
                             author_elem = comment_node.find_element(By.CSS_SELECTOR, "span.comments-post-meta__name-text")
                             author = author_elem.text.strip()
                         except:
-                            pass # Keep as Unknown
+                            pass 
 
                     # 3. Create Unique ID
                     unique_id = f"{author[:15]}_{comment_text[:20]}"
@@ -226,6 +202,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n!!! STOPPING SCRAPER (User Interrupt) !!!")
+    except Exception as e:
+        # Catch browser closing or connection loss
+        if "Browser Closed" in str(e) or "Connection aborted" in str(e) or "forcibly closed" in str(e):
+             print("\n\n⚠️ Browser window closed. Saving collected data...")
+        else:
+             print(f"\n\n❌ Unexpected error: {e}")
 
     # 6. Export
     if scraped_data:
@@ -245,7 +227,10 @@ def main():
     else:
         print("\n⚠️ No comments collected.")
 
-    driver.quit()
+    try:
+        driver.quit()
+    except:
+        pass
     input("Press Enter to exit.")
 
 if __name__ == "__main__":
